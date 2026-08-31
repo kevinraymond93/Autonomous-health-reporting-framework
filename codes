@@ -1,0 +1,1143 @@
+module scl_gen #(
+    parameter DIVIDER = 5
+)(
+    input  wire clk,
+    input  wire reset,
+    input  wire enable,
+
+    output reg scl,
+    output reg scl_tick
+);
+
+reg [15:0] count;
+
+always @(posedge clk or posedge reset) begin
+
+    if (reset) begin
+        count    <= 16'd0;
+        scl      <= 1'b1;
+        scl_tick <= 1'b0;
+    end
+
+    else if (!enable) begin
+        count    <= 16'd0;
+        scl      <= 1'b1;
+        scl_tick <= 1'b0;
+    end
+
+    else begin
+
+        scl_tick <= 1'b0;
+
+        if (count == DIVIDER-1) begin
+            count    <= 16'd0;
+            scl      <= ~scl;
+            scl_tick <= 1'b1;
+        end
+
+        else begin
+            count <= count + 1'b1;
+        end
+
+    end
+
+end
+
+endmodule
+-----------------------------------------------
+
+module counters (
+
+    input wire clk,
+    input wire reset,
+
+    input wire bit_count_enable,
+    input wire bit_count_clear,
+
+    input wire time_count_enable,
+    input wire time_count_clear,
+
+    output reg [3:0] bit_count,
+    output reg [15:0] time_count,
+
+    output wire bit_count_done
+
+);
+
+assign bit_count_done = (bit_count == 4'd8);
+
+always @(posedge clk or posedge reset) begin
+
+    if (reset) begin
+
+        bit_count  <= 4'd0;
+        time_count <= 16'd0;
+
+    end
+
+    else begin
+
+        if (bit_count_clear)
+            bit_count <= 4'd0;
+
+        else if (bit_count_enable)
+            bit_count <= bit_count + 1'b1;
+
+
+        if (time_count_clear)
+            time_count <= 16'd0;
+
+        else if (time_count_enable)
+            time_count <= time_count + 1'b1;
+
+    end
+
+end
+
+endmodule
+-----------------------------------------------
+
+module shift_reg (
+
+    input wire clk,
+    input wire reset,
+
+    input wire load_enable,
+    input wire shift_enable,
+
+    input wire [7:0] parallel_data,
+
+    output reg serial_data,
+    output reg shift_done
+
+);
+
+reg [7:0] shift_register;
+reg [3:0] bit_count;
+
+always @(posedge clk or posedge reset) begin
+
+    if (reset) begin
+
+        shift_register <= 8'd0;
+        serial_data    <= 1'b0;
+        bit_count      <= 4'd0;
+        shift_done     <= 1'b0;
+
+    end
+
+    else begin
+
+        shift_done <= 1'b0;
+
+        if (load_enable) begin
+
+            shift_register <= parallel_data;
+            serial_data    <= parallel_data[7];
+            bit_count      <= 4'd0;
+
+        end
+
+        else if (shift_enable) begin
+
+            shift_register <= {
+                shift_register[6:0],
+                1'b0
+            };
+
+            serial_data <= shift_register[6];
+
+            bit_count <= bit_count + 1'b1;
+
+            if (bit_count == 4'd7)
+                shift_done <= 1'b1;
+
+        end
+
+    end
+
+end
+
+endmodule
+-----------------------------------------------
+
+module ack_logic (
+
+    input wire clk,
+    input wire reset,
+
+    input wire sda_in,
+    input wire ack_enable,
+
+    output reg ack_received
+
+);
+
+always @(posedge clk or posedge reset) begin
+
+    if (reset) begin
+
+        ack_received <= 1'b0;
+
+    end
+
+    else if (ack_enable) begin
+
+        if (sda_in == 1'b0)
+            ack_received <= 1'b1;
+
+        else
+            ack_received <= 1'b0;
+
+    end
+
+    else begin
+
+        ack_received <= 1'b0;
+
+    end
+
+end
+
+endmodule
+-----------------------------------------------
+
+module cdc_sync (
+
+    input wire clk_dst,
+    input wire reset,
+
+    input wire async_signal,
+
+    output reg sync_signal
+
+);
+
+reg sync_ff1;
+
+always @(posedge clk_dst or posedge reset) begin
+
+    if (reset) begin
+
+        sync_ff1    <= 1'b0;
+        sync_signal <= 1'b0;
+
+    end
+
+    else begin
+
+        sync_ff1    <= async_signal;
+        sync_signal <= sync_ff1;
+
+    end
+
+end
+
+endmodule
+-----------------------------------------------
+
+module fifo_queue #(
+    parameter DATA_WIDTH = 32,
+    parameter DEPTH = 16
+)(
+    input wire clk,
+    input wire reset,
+
+    input wire wr_en,
+    input wire rd_en,
+
+    input wire [DATA_WIDTH-1:0] data_in,
+
+    output reg [DATA_WIDTH-1:0] data_out,
+
+    output wire full,
+    output wire empty
+);
+
+reg [DATA_WIDTH-1:0] mem [0:DEPTH-1];
+
+reg [4:0] wr_ptr;
+reg [4:0] rd_ptr;
+reg [4:0] count;
+
+assign full  = (count == DEPTH);
+assign empty = (count == 0);
+
+always @(posedge clk or posedge reset) begin
+
+    if (reset) begin
+
+        wr_ptr   <= 5'd0;
+        rd_ptr   <= 5'd0;
+        count    <= 5'd0;
+        data_out <= 32'd0;
+
+    end
+
+    else begin
+
+        if (wr_en && !full) begin
+
+            mem[wr_ptr[3:0]] <= data_in;
+
+            wr_ptr <= wr_ptr + 1'b1;
+
+        end
+
+        if (rd_en && !empty) begin
+
+            data_out <= mem[rd_ptr[3:0]];
+
+            rd_ptr <= rd_ptr + 1'b1;
+
+        end
+
+        case ({
+            wr_en && !full,
+            rd_en && !empty
+        })
+
+            2'b10:
+                count <= count + 1'b1;
+
+            2'b01:
+                count <= count - 1'b1;
+
+            default:
+                count <= count;
+
+        endcase
+
+    end
+
+end
+
+endmodule
+-----------------------------------------------
+
+module address_decoder (
+
+    input wire [6:0] address,
+
+    input wire [7:0] voltage_data,
+    input wire [7:0] current_data,
+    input wire [7:0] temperature_data,
+    input wire [7:0] error_data,
+
+    output reg [7:0] selected_data
+
+);
+
+always @(*) begin
+
+    case (address)
+
+        // Voltage subsystem
+        7'h10:
+            selected_data = voltage_data;
+
+        // Current subsystem
+        7'h20:
+            selected_data = current_data;
+
+        // Temperature subsystem
+        7'h30:
+            selected_data = temperature_data;
+
+        // Error subsystem
+        7'h40:
+            selected_data = error_data;
+
+        // Invalid address
+        default:
+            selected_data = 8'd0;
+
+    endcase
+
+end
+
+endmodule
+-----------------------------------------------
+
+module memory_reg (
+
+    input wire clk,
+    input wire reset,
+
+    input wire write_enable,
+
+    input wire [7:0] data_in,
+
+    output reg [7:0] data_out
+
+);
+
+reg [7:0] health_register;
+
+always @(posedge clk or posedge reset) begin
+
+    if (reset) begin
+
+        health_register <= 8'd0;
+        data_out        <= 8'd0;
+
+    end
+
+    else if (write_enable) begin
+
+        health_register <= data_in;
+        data_out        <= data_in;
+
+    end
+
+end
+
+endmodule
+-----------------------------------------------
+
+module health_evaluator (
+
+    input wire [7:0] health_value,
+
+    output reg [1:0] health_status
+
+);
+
+localparam NORMAL   = 2'b00;
+localparam WARNING  = 2'b01;
+localparam CRITICAL = 2'b10;
+
+always @(*) begin
+
+    if (health_value >= 8'd80)
+
+        health_status = NORMAL;
+
+    else if (health_value >= 8'd50)
+
+        health_status = WARNING;
+
+    else
+
+        health_status = CRITICAL;
+
+end
+
+endmodule
+-----------------------------------------------
+
+module master_fsm (
+
+    input wire clk,
+    input wire reset,
+
+    input wire start_poll,
+
+    input wire i2c_done,
+    input wire ack_received,
+
+    output reg master_start,
+
+    output reg [2:0] subsystem_id,
+
+    output reg report_done,
+
+    output reg busy,
+
+    output reg [3:0] state
+
+);
+
+localparam IDLE      = 4'd0;
+localparam START_I2C = 4'd1;
+localparam WAIT_I2C  = 4'd2;
+localparam NEXT      = 4'd3;
+localparam COMPLETE  = 4'd4;
+
+
+always @(posedge clk or posedge reset) begin
+
+    if (reset) begin
+
+        state        <= IDLE;
+        subsystem_id <= 3'd0;
+
+    end
+
+    else begin
+
+        case (state)
+
+            IDLE: begin
+
+                if (start_poll) begin
+
+                    subsystem_id <= 3'd0;
+
+                    state <= START_I2C;
+
+                end
+
+            end
+
+
+            START_I2C: begin
+
+                state <= WAIT_I2C;
+
+            end
+
+
+            WAIT_I2C: begin
+
+                if (i2c_done)
+
+                    state <= NEXT;
+
+            end
+
+
+            NEXT: begin
+
+                // Last subsystem = Error
+                if (subsystem_id == 3'd3)
+
+                    state <= COMPLETE;
+
+                else begin
+
+                    subsystem_id <= subsystem_id + 1'b1;
+
+                    state <= START_I2C;
+
+                end
+
+            end
+
+
+            COMPLETE: begin
+
+                state <= IDLE;
+
+            end
+
+
+            default: begin
+
+                state <= IDLE;
+
+            end
+
+        endcase
+
+    end
+
+end
+
+
+always @(*) begin
+
+    master_start = 1'b0;
+
+    report_done = 1'b0;
+
+    busy = 1'b0;
+
+
+    case (state)
+
+        IDLE: begin
+
+            busy = 1'b0;
+
+        end
+
+
+        START_I2C: begin
+
+            master_start = 1'b1;
+
+            busy = 1'b1;
+
+        end
+
+
+        WAIT_I2C: begin
+
+            busy = 1'b1;
+
+        end
+
+
+        NEXT: begin
+
+            busy = 1'b1;
+
+        end
+
+
+        COMPLETE: begin
+
+            report_done = 1'b1;
+
+            busy = 1'b0;
+
+        end
+
+    endcase
+
+end
+
+endmodule
+-----------------------------------------------
+
+module top_health_framework #(
+    parameter I2C_DIVIDER = 5
+)(
+    input wire clk,
+    input wire reset,
+    input wire start_poll,
+
+    inout wire sda,
+
+    output wire scl,
+
+    output wire [2:0] subsystem_id,
+
+    output wire [6:0] selected_address,
+
+    output wire [7:0] health_data,
+
+    output wire [1:0] health_status,
+
+    output wire report_done,
+
+    output wire busy
+);
+
+
+// ====================================================
+// INTERNAL SIGNALS
+// ====================================================
+
+wire master_start;
+
+wire i2c_done;
+
+wire ack_received;
+
+wire [7:0] selected_data;
+
+
+// ====================================================
+// FOUR SUBSYSTEM VALUES
+// ====================================================
+
+wire [7:0] voltage_data;
+
+wire [7:0] current_data;
+
+wire [7:0] temperature_data;
+
+wire [7:0] error_data;
+
+
+// ====================================================
+// HEALTH VALUES
+// ====================================================
+
+assign voltage_data     = 8'd92;
+
+assign current_data     = 8'd84;
+
+assign temperature_data = 8'd76;
+
+assign error_data       = 8'd40;
+
+
+// ====================================================
+// ADDRESS GENERATION
+// ====================================================
+
+assign selected_address =
+
+    (subsystem_id == 3'd0) ? 7'h10 :
+
+    (subsystem_id == 3'd1) ? 7'h20 :
+
+    (subsystem_id == 3'd2) ? 7'h30 :
+
+                             7'h40;
+
+
+// ====================================================
+// ADDRESS DECODER
+// ====================================================
+
+address_decoder DECODER (
+
+    .address(selected_address),
+
+    .voltage_data(voltage_data),
+
+    .current_data(current_data),
+
+    .temperature_data(temperature_data),
+
+    .error_data(error_data),
+
+    .selected_data(selected_data)
+
+);
+
+
+// ====================================================
+// HEALTH EVALUATOR
+// ====================================================
+
+health_evaluator EVALUATOR (
+
+    .health_value(selected_data),
+
+    .health_status(health_status)
+
+);
+
+
+assign health_data = selected_data;
+
+
+// ====================================================
+// MASTER FSM
+// ====================================================
+
+master_fsm FSM (
+
+    .clk(clk),
+
+    .reset(reset),
+
+    .start_poll(start_poll),
+
+    .i2c_done(i2c_done),
+
+    .ack_received(ack_received),
+
+    .master_start(master_start),
+
+    .subsystem_id(subsystem_id),
+
+    .report_done(report_done),
+
+    .busy(busy),
+
+    .state()
+
+);
+
+
+// ====================================================
+// SCL GENERATOR
+// ====================================================
+
+scl_gen #(
+
+    .DIVIDER(I2C_DIVIDER)
+
+) SCL_GENERATOR (
+
+    .clk(clk),
+
+    .reset(reset),
+
+    .enable(busy),
+
+    .scl(scl),
+
+    .scl_tick()
+
+);
+
+
+// ====================================================
+// ACK LOGIC
+// ====================================================
+
+ack_logic ACK (
+
+    .clk(clk),
+
+    .reset(reset),
+
+    .sda_in(sda),
+
+    .ack_enable(busy),
+
+    .ack_received(ack_received)
+
+);
+
+
+// ====================================================
+// TRANSACTION COMPLETION
+// ====================================================
+
+assign i2c_done = ack_received;
+
+
+endmodule
+-----------------------------------------------
+
+module i2c_slave_model #(
+
+    parameter SLAVE_ADDRESS = 7'h10,
+
+    parameter HEALTH_VALUE = 8'd92
+
+)(
+    input wire reset,
+
+    input wire scl,
+
+    inout wire sda
+);
+
+reg sda_drive_low;
+
+reg [7:0] address_shift;
+
+reg [3:0] bit_count;
+
+reg address_matched;
+
+assign sda = sda_drive_low ? 1'b0 : 1'bz;
+
+
+always @(posedge scl or posedge reset) begin
+
+    if (reset) begin
+
+        address_shift   <= 8'd0;
+
+        bit_count       <= 4'd0;
+
+        address_matched <= 1'b0;
+
+    end
+
+    else begin
+
+        if (bit_count < 4'd8) begin
+
+            address_shift <= {
+
+                address_shift[6:0],
+
+                sda
+
+            };
+
+            bit_count <= bit_count + 1'b1;
+
+        end
+
+        else begin
+
+            if (address_shift[7:1] == SLAVE_ADDRESS)
+
+                address_matched <= 1'b1;
+
+            else
+
+                address_matched <= 1'b0;
+
+            bit_count <= 4'd0;
+
+        end
+
+    end
+
+end
+
+
+always @(negedge scl or posedge reset) begin
+
+    if (reset)
+
+        sda_drive_low <= 1'b0;
+
+    else if (address_matched)
+
+        sda_drive_low <= 1'b1;
+
+    else
+
+        sda_drive_low <= 1'b0;
+
+end
+
+endmodule
+-----------------------------------------------
+
+`timescale 1ns / 1ps
+
+module tb_top_health_framework;
+
+
+// ====================================================
+// CLOCK
+// ====================================================
+
+reg clk;
+
+
+// ====================================================
+// RESET
+// ====================================================
+
+reg reset;
+
+
+// ====================================================
+// START
+// ====================================================
+
+reg start_poll;
+
+
+// ====================================================
+// I2C BUS
+// ====================================================
+
+wire scl;
+
+wire sda;
+
+
+// ====================================================
+// OUTPUTS
+// ====================================================
+
+wire [2:0] subsystem_id;
+
+wire [6:0] selected_address;
+
+wire [7:0] health_data;
+
+wire [1:0] health_status;
+
+wire report_done;
+
+wire busy;
+
+
+// ====================================================
+// DUT
+// ====================================================
+
+top_health_framework #(
+
+    .I2C_DIVIDER(5)
+
+) DUT (
+
+    .clk(clk),
+
+    .reset(reset),
+
+    .start_poll(start_poll),
+
+    .sda(sda),
+
+    .scl(scl),
+
+    .subsystem_id(subsystem_id),
+
+    .selected_address(selected_address),
+
+    .health_data(health_data),
+
+    .health_status(health_status),
+
+    .report_done(report_done),
+
+    .busy(busy)
+
+);
+
+
+// ====================================================
+// CLOCK
+// ====================================================
+
+always #5 clk = ~clk;
+
+
+// ====================================================
+// VOLTAGE
+// 10H → 92
+// ====================================================
+
+i2c_slave_model #(
+
+    .SLAVE_ADDRESS(7'h10),
+
+    .HEALTH_VALUE(8'd92)
+
+) VOLTAGE_SLAVE (
+
+    .reset(reset),
+
+    .scl(scl),
+
+    .sda(sda)
+
+);
+
+
+// ====================================================
+// CURRENT
+// 20H → 84
+// ====================================================
+
+i2c_slave_model #(
+
+    .SLAVE_ADDRESS(7'h20),
+
+    .HEALTH_VALUE(8'd84)
+
+) CURRENT_SLAVE (
+
+    .reset(reset),
+
+    .scl(scl),
+
+    .sda(sda)
+
+);
+
+
+// ====================================================
+// TEMPERATURE
+// 30H → 76
+// ====================================================
+
+i2c_slave_model #(
+
+    .SLAVE_ADDRESS(7'h30),
+
+    .HEALTH_VALUE(8'd76)
+
+) TEMPERATURE_SLAVE (
+
+    .reset(reset),
+
+    .scl(scl),
+
+    .sda(sda)
+
+);
+
+
+// ====================================================
+// ERROR
+// 40H → 40
+// ====================================================
+
+i2c_slave_model #(
+
+    .SLAVE_ADDRESS(7'h40),
+
+    .HEALTH_VALUE(8'd40)
+
+) ERROR_SLAVE (
+
+    .reset(reset),
+
+    .scl(scl),
+
+    .sda(sda)
+
+);
+
+
+// ====================================================
+// TEST SEQUENCE
+// ====================================================
+
+initial begin
+
+    clk = 1'b0;
+
+    reset = 1'b1;
+
+    start_poll = 1'b0;
+
+
+    // Reset period
+
+    #100;
+
+    reset = 1'b0;
+
+
+    // Start polling
+
+    #100;
+
+    start_poll = 1'b1;
+
+    #10;
+
+    start_poll = 1'b0;
+
+
+    // Allow simulation to run
+
+    #10000;
+
+
+    $display("-------------------------------------");
+
+    $display("4-SUBSYSTEM HEALTH REPORT COMPLETE");
+
+    $display("-------------------------------------");
+
+
+    $finish;
+
+end
+
+
+// ====================================================
+// MONITOR
+// ====================================================
+
+always @(posedge clk) begin
+
+    $display(
+
+        "TIME=%0t | ID=%0d | ADDRESS=%h | HEALTH=%0d | STATUS=%0d | BUSY=%b | ACK=%b | DONE=%b",
+
+        $time,
+
+        subsystem_id,
+
+        selected_address,
+
+        health_data,
+
+        health_status,
+
+        busy,
+
+        DUT.ack_received,
+
+        report_done
+
+    );
+
+end
+
+endmodule
+
